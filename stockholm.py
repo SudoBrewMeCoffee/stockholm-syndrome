@@ -128,15 +128,18 @@ def notify(title, text):
     except Exception:
         pass
 
-def ntfy(text, title="Stockholm", urgent=False, click=None):
+def ntfy(text, title="Stockholm", urgent=False, click=None, actions=None):
+    """actions: list of (label, url) -> buttons on the notification (max 3)."""
     if not NTFY_TOPIC:
         return False
     try:
-        req = urllib.request.Request(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=text.encode("utf-8"),
-            headers={"Title": title.encode("ascii", "ignore").decode().strip() or "Stockholm",
-                     "Priority": "5" if urgent else "3",
-                     "Tags": "green_circle,iphone" if urgent else "eyes",
-                     "Click": click or BUY_URL, "Content-Type": "text/plain; charset=utf-8"})
+        headers = {"Title": title.encode("ascii", "ignore").decode().strip() or "Stockholm",
+                   "Priority": "5" if urgent else "3",
+                   "Tags": "green_circle,iphone" if urgent else "eyes",
+                   "Click": click or BUY_URL, "Content-Type": "text/plain; charset=utf-8"}
+        if actions:
+            headers["Actions"] = "; ".join(f"view, {lbl.encode('ascii','ignore').decode()}, {url}" for lbl, url in actions[:3])
+        req = urllib.request.Request(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=text.encode("utf-8"), headers=headers)
         with urllib.request.urlopen(req, timeout=20) as r:
             r.read()
         return True
@@ -144,10 +147,10 @@ def ntfy(text, title="Stockholm", urgent=False, click=None):
         log(f"NTFY FAILED: {e}")
         return False
 
-def alert(text, title="Stockholm", urgent=False, click=None):
+def alert(text, title="Stockholm", urgent=False, click=None, actions=None):
     log("ALERT: " + text.replace("\n", " | "))
     notify(title, text[:200])
-    ntfy(text, title, urgent, click)
+    ntfy(text, title, urgent, click, actions)
     imessage(text)
 
 # ----------------------------------------------------------------- fetch ----
@@ -184,6 +187,7 @@ def parse(data):
     return out
 
 _cycle = [0]
+_retry_after = [0]
 def poll():
     """-> (results dict or None, error string or None)"""
     merged, errs = {}, []
@@ -193,7 +197,10 @@ def poll():
         try:
             merged.update(parse(fetch(loc)))
         except urllib.error.HTTPError as e:
-            errs.append(f"{loc}: HTTP {e.code}")
+            ra = e.headers.get("Retry-After") if e.headers else None
+            errs.append(f"{loc}: HTTP {e.code}" + (f" (Retry-After {ra})" if ra else ""))
+            if ra and str(ra).isdigit():
+                _retry_after[0] = max(_retry_after[0], int(ra))
         except Exception as e:
             errs.append(f"{loc}: {type(e).__name__} {e}")
         time.sleep(1.5)
@@ -302,11 +309,16 @@ def main():
             if not st.get("standby_active"):
                 alert(f"Stockholm standby on {os.uname().nodename}: primary silent for {int(age)}s — TAKING OVER polling.", urgent=True)
                 st["standby_active"] = True; save_state(st)
+        if st.get("blocked_until", 0) > time.time():
+            w = int(st["blocked_until"] - time.time())
+            log(f"restart during block: honouring persisted backoff {w}s"); time.sleep(min(w, 900)); st["blocked_until"] = 0
+        _retry_after[0] = 0
         res, err = poll()
         now = time.time()
         if err and not res:
             fails += 1
-            wait = BACKOFF[min(fails - 1, len(BACKOFF) - 1)]
+            wait = max(BACKOFF[min(fails - 1, len(BACKOFF) - 1)], _retry_after[0])
+            st["blocked_until"] = now + wait; save_state(st)
             log(f"POLL FAILED ({fails}): {err} — backoff {wait}s")
             if fails >= 2 and not blocked_alerted:
                 alert(f"WARNING: Stockholm cannot read Apple's feed ({err}). Retrying with backoff — "
@@ -330,7 +342,7 @@ def main():
             key = f"{sid}|{part}"
             prev_q = st["quotes"].get(key)
             if quote and quote != prev_q:
-                if prev_q is not None and status != "available":
+                if prev_q is not None and status != "available" and key not in st["avail"]:
                     quote_changes.append(f"{name}: {quote}")
                 st["quotes"][key] = quote
             if status == "available":
@@ -340,8 +352,13 @@ def main():
                 elif now - st["last_alert"].get(key, 0) >= REALERT_EVERY:
                     still.append((sid, name, part))
             elif key in st["avail"]:
-                log(f"gone: {name} {PARTS[part]}")
-                st["avail"].pop(key, None); st["last_alert"].pop(key, None)
+                misses = st.setdefault("misses", {}).get(key, 0) + 1
+                st["misses"][key] = misses
+                if misses >= 2:
+                    log(f"gone: {name} {PARTS[part]} (2 consecutive misses)")
+                    st["avail"].pop(key, None); st["last_alert"].pop(key, None); st["misses"].pop(key, None)
+            if status == "available" and "misses" in st:
+                st["misses"].pop(key, None)
 
         pri = {s: i for i, (s, _) in enumerate(TARGET_STORES)}
         order = lambda items: sorted(items, key=lambda t: pri.get(t[0], 99))
@@ -363,7 +380,8 @@ def main():
                 for part in sorted({p for _, _, p in items}):
                     lines.append(f"{short(part)}: {PART_URL.get(part, BUY_URL)}")
                 lines.append("Tap link → Pick up → choose store → Continue. GO.")
-                alert("\n".join(lines), title, urgent=True, click=PART_URL.get(order(items)[0][2], BUY_URL))
+                btns = [(short(p), PART_URL.get(p, BUY_URL)) for p in sorted({p for _, _, p in items})]
+                alert("\n".join(lines), title, urgent=True, click=PART_URL.get(order(items)[0][2], BUY_URL), actions=btns)
             st["avail_a"] = any(k.split("|")[1] in PLAN_A for k in st["avail"])
         if still:
             lines = ["Still available for pickup:"]

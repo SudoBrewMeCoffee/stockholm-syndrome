@@ -32,6 +32,10 @@ any Mac. The interesting bits are the things we learned the hard way, below.
 - **Hot standby.** A second Mac runs the same script in standby mode and polls *only* if the primary's
   heartbeat goes stale for 4 minutes — so you get failover without doubling the request rate from
   your IP (see below for why that matters). Takes over and stands down with an alert each way.
+- **Borrowed from the best of the other watchers:** ntfy *action buttons* on the push (one per
+  colour, straight to the product page); `Retry-After` honoured when Apple sends one; backoff
+  persisted across restarts so a crash mid-block doesn't hammer on the way back; two-miss
+  hysteresis so a one-cycle blip never produces a "gone" + duplicate "available" pair.
 - **Daily wake-up push** at 05:45 with the current state. Doubles as your alarm.
 - **Self-uninstalls** (LaunchAgent + files) when the run window ends. Leaves the log.
 
