@@ -25,7 +25,9 @@ any Mac. The interesting bits are the things we learned the hard way, below.
 - **Alerts that wake you.** [ntfy](https://ntfy.sh) push at priority 5 (add ntfy to your Sleep Focus
   allow-list and it rings through Do Not Disturb), plus iMessage and a macOS notification. Each alert
   carries a direct link to the *pre-configured* product page for the colour that's in stock.
-- **Adaptive polling.** 120s overnight, 45s in the launch window (05:30–10:00).
+- **Adaptive polling.** 120s overnight; 45s in the launch-morning window (05:30–10:00); 60s at
+  midday (12:00–14:30) and evening (20:00–22:30), when uncollected reservations expire back into
+  stock — the second-best time to catch one if the morning scramble fails.
 - **Block-aware.** On HTTP 541/403 it backs off (60s → 15 min), re-handshakes with the buy page,
   sends **one** loud warning ("availability is UNKNOWN") and **one** recovery notice. Silence never
   means "no stock".
@@ -48,6 +50,10 @@ too). The block lasted **43 minutes**, and retrying every 5–15 minutes during 
 One request every 45–120 seconds has run for hours without trouble. So: **one watcher per IP**, and
 make the second one a standby, not a twin. A VPN won't help — datacenter IPs get 541 on sight.
 A phone hotspot or a residential proxy (`STOCK_PROXY`) is a genuinely different IP.
+
+**You get second chances.** Reservations people don't collect return to stock — mostly midday
+and after 8pm. Apple's pickup watcher ecosystem agrees the big drop is 6–9am local, with ~7am
+the sweet spot, but the afternoon and evening windows are real.
 
 **`pickupDisplay` is the field.** `"available"` means reservable now. Before launch every store
 says `"default"` with `pickupSearchQuote: "Check back for availability on 10.24"` — the quote text

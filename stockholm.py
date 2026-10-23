@@ -71,7 +71,9 @@ NTFY_SERVER = env("STOCK_NTFY_SERVER", "https://ntfy.sh")
 HEARTBEAT_EVERY = int(env("STOCK_HEARTBEAT", "3600"))      # seconds; 0 disables (iMessage only, silent)
 REALERT_EVERY = 300                                        # re-send while still available
 RUN_UNTIL = datetime.fromisoformat(env("STOCK_RUN_UNTIL", "2026-10-24T23:59"))
-HOT_START, HOT_END = (5, 30), (10, 0)                      # fast-polling window (local time)
+# Fast-polling windows (local time): the launch-morning drop, then midday and evening when
+# uncollected reservations expire back into stock. Everything else runs at INTERVAL_COLD.
+HOT_WINDOWS = [((5, 30), (10, 0), 45), ((12, 0), (14, 30), 60), ((20, 0), (22, 30), 60)]
 INTERVAL_HOT, INTERVAL_COLD = 45, 120                      # seconds (±15% jitter)
 WAKE_AT = (5, 45)                                          # daily max-priority status push; None to disable
 BACKOFF = [60, 120, 300, 600, 900]
@@ -227,9 +229,11 @@ def uninstall():
     imessage("Stockholm: run window over, uninstalled itself. Log kept at ~/stockholm-syndrome/stockholm.log")
 
 def current_interval():
-    now = datetime.now()
-    hot = HOT_START <= (now.hour, now.minute) < HOT_END
-    return INTERVAL_HOT if hot else INTERVAL_COLD
+    hm = datetime.now().timetuple()[3:5]
+    for start, end, secs in HOT_WINDOWS:
+        if start <= hm < end:
+            return secs
+    return INTERVAL_COLD
 
 def wake_message(st):
     """Once per day at WAKE_AT: max-priority status push that doubles as the alarm."""
