@@ -92,6 +92,9 @@ python3 stockholm.py --test-alert          # should buzz your phone
 zsh install.sh                             # LaunchAgent: starts now, restarts on crash, self-removes
 ```
 
+Changed the state machine? `python3 test_sim.py` runs an offline simulation (fake feed, no
+alerts, no requests to Apple) and checks the alert → hysteresis → gone → history sequence.
+
 Standby on a second Mac (same IP is fine — it only polls when the primary is dead):
 
 ```sh
