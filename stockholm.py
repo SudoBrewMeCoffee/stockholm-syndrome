@@ -66,7 +66,7 @@ TARGET_STORES = [(p.split(":")[0], p.split(":")[1]) for p in env(
 TARGET_IDS = {s for s, _ in TARGET_STORES}
 
 IMESSAGE_TO = env("STOCK_IMESSAGE_TO", "")                 # e.g. +447700900000 (macOS Messages must be signed in)
-NTFY_TOPIC = env("STOCK_NTFY_TOPIC", "")                   # subscribe to it in the ntfy app
+NTFY_TOPICS = [t.strip() for t in env("STOCK_NTFY_TOPIC", "").split(",") if t.strip()]   # comma-separate for a partner/family
 NTFY_SERVER = env("STOCK_NTFY_SERVER", "https://ntfy.sh")
 HEARTBEAT_EVERY = int(env("STOCK_HEARTBEAT", "3600"))      # seconds; 0 disables (iMessage only, silent)
 REALERT_EVERY = 300                                        # re-send while still available
@@ -87,6 +87,7 @@ HOME = os.path.expanduser("~")
 BASE = os.path.join(HOME, "stockholm-syndrome")
 LOG = os.path.join(BASE, "stockholm.log")
 STATE = os.path.join(BASE, "state.json")
+HISTORY = os.path.join(BASE, "history.csv")   # every appear/disappear event, for pattern-spotting
 PLIST = os.path.join(HOME, "Library", "LaunchAgents", LAUNCHD_LABEL + ".plist")
 BUY_URL = f"https://www.apple.com/{COUNTRY}/shop/buy-iphone/{PRODUCT_SLUG}"
 API = f"https://www.apple.com/{COUNTRY}/shop/retail/pickup-message"
@@ -132,22 +133,23 @@ def notify(title, text):
 
 def ntfy(text, title="Stockholm", urgent=False, click=None, actions=None):
     """actions: list of (label, url) -> buttons on the notification (max 3)."""
-    if not NTFY_TOPIC:
+    if not NTFY_TOPICS:
         return False
-    try:
+    ok = True
+    for topic in NTFY_TOPICS:
+      try:
         headers = {"Title": title.encode("ascii", "ignore").decode().strip() or "Stockholm",
                    "Priority": "5" if urgent else "3",
                    "Tags": "green_circle,iphone" if urgent else "eyes",
                    "Click": click or BUY_URL, "Content-Type": "text/plain; charset=utf-8"}
         if actions:
             headers["Actions"] = "; ".join(f"view, {lbl.encode('ascii','ignore').decode()}, {url}" for lbl, url in actions[:3])
-        req = urllib.request.Request(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=text.encode("utf-8"), headers=headers)
+        req = urllib.request.Request(f"{NTFY_SERVER}/{topic}", data=text.encode("utf-8"), headers=headers)
         with urllib.request.urlopen(req, timeout=20) as r:
             r.read()
-        return True
-    except Exception as e:
-        log(f"NTFY FAILED: {e}")
-        return False
+      except Exception as e:
+        log(f"NTFY FAILED ({topic}): {e}"); ok = False
+    return ok
 
 def alert(text, title="Stockholm", urgent=False, click=None, actions=None):
     log("ALERT: " + text.replace("\n", " | "))
@@ -251,6 +253,13 @@ def wake_message(st):
         st["wake_sent"] = key
         save_state(st)
 
+def history(event, sid, name, part, extra=""):
+    new = not os.path.exists(HISTORY)
+    with open(HISTORY, "a") as f:
+        if new:
+            f.write("timestamp,event,store_id,store,part,config,extra\n")
+        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S},{event},{sid},{name},{part},{PARTS.get(part, part)},{extra}\n")
+
 def load_state():
     try:
         return json.load(open(STATE))
@@ -341,7 +350,7 @@ def main():
         if err:
             log(f"partial: {err}")
 
-        newly, still, quote_changes = [], [], []
+        newly, still, quote_changes, gone = [], [], [], []
         for (sid, part), (status, quote, name) in res.items():
             key = f"{sid}|{part}"
             prev_q = st["quotes"].get(key)
@@ -353,13 +362,17 @@ def main():
                 if key not in st["avail"]:
                     st["avail"][key] = now
                     newly.append((sid, name, part))
+                    history("appeared", sid, name, part)
                 elif now - st["last_alert"].get(key, 0) >= REALERT_EVERY:
                     still.append((sid, name, part))
             elif key in st["avail"]:
                 misses = st.setdefault("misses", {}).get(key, 0) + 1
                 st["misses"][key] = misses
                 if misses >= 2:
-                    log(f"gone: {name} {PARTS[part]} (2 consecutive misses)")
+                    lasted = int((now - st["avail"].get(key, now)) / 60)
+                    log(f"gone: {name} {PARTS[part]} after {lasted} min")
+                    history("gone", sid, name, part, f"lasted_min={lasted}")
+                    gone.append(f"{name} — {short(part)} (lasted {lasted} min)")
                     st["avail"].pop(key, None); st["last_alert"].pop(key, None); st["misses"].pop(key, None)
             if status == "available" and "misses" in st:
                 st["misses"].pop(key, None)
@@ -393,6 +406,8 @@ def main():
                 lines.append(f"• {name} — {short(part)}")
                 st["last_alert"][f"{sid}|{part}"] = now
             alert("\n".join(lines), urgent=any(p in PLAN_A for _, _, p in still))
+        if gone:
+            alert("No longer available:\n" + "\n".join(gone))   # quiet (priority 3): useful for timing, not for action
         if quote_changes:
             alert("Apple pickup text changed (not yet 'available'):\n" + "\n".join(sorted(set(quote_changes))[:8]))
         save_state(st)

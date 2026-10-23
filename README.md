@@ -38,6 +38,9 @@ any Mac. The interesting bits are the things we learned the hard way, below.
   colour, straight to the product page); `Retry-After` honoured when Apple sends one; backoff
   persisted across restarts so a crash mid-block doesn't hammer on the way back; two-miss
   hysteresis so a one-cycle blip never produces a "gone" + duplicate "available" pair.
+- **Second chances and history.** A quiet "no longer available (lasted N min)" notice when stock
+  goes, and every appear/disappear event logged to `history.csv` so you can see each store's pattern.
+- **Alert more than one phone.** `STOCK_NTFY_TOPIC=mine,partners` — comma-separated topics.
 - **Daily wake-up push** at 05:45 with the current state. Doubles as your alarm.
 - **Self-uninstalls** (LaunchAgent + files) when the run window ends. Leaves the log.
 
@@ -67,6 +70,14 @@ useless as an alarm. ntfy at priority 5 is the loud channel.
 projects that drive Chrome through to "Place Order" need your Apple ID password and card details in
 a script, and that's exactly the pattern Apple's fraud checks cancel. Don't.
 
+**Don't change the configuration at checkout.** Land on the pre-configured product page the alert
+links to, pick the store, pay. Changing colour or capacity in the bag re-checks inventory and can
+lose the reservation (MacRumors' launch guide says the same).
+
+**UK pickup goes live before the US.** For the iPhone 17 and 18 Pro launches, UK same-day pickup was
+already showing in the morning while the US still said "check back". Nobody has pinned the minute;
+start watching from ~05:30 local.
+
 **Trade-in:** do it at the counter when you collect, not in the online checkout. Fewer screens at
 6am, same money, and it comes straight off the price.
 
@@ -90,7 +101,8 @@ STANDBY=1 zsh install.sh
 zsh heartbeat-install.sh you@standby-mac
 ```
 
-Find part numbers for a different product: `curl -sA 'Mozilla/5.0' https://www.apple.com/uk/shop/buy-iphone/<slug> | grep -oE '"partNumber":"[A-Z0-9/]+","price":\{"fullPrice":[0-9.]+\},"category":"iphone","name":"[^"]+"' | sort -u`
+Find part numbers for a different product (run it again on launch day — new configs appear):
+`python3 find_parts.py iphone-duo` (or `--country us`). The old way: `curl -sA 'Mozilla/5.0' https://www.apple.com/uk/shop/buy-iphone/<slug> | grep -oE '"partNumber":"[A-Z0-9/]+","price":\{"fullPrice":[0-9.]+\},"category":"iphone","name":"[^"]+"' | sort -u`
 
 Find store IDs for your postcode: set `STOCK_STORES=` (empty) and run `--once`.
 
