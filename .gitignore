@@ -3,3 +3,7 @@ state.json
 *.log
 __pycache__/
 *.shortcut
+snapshot.json
+snapshot.json.tmp
+paused
+Stockholm.app/

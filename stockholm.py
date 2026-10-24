@@ -180,6 +180,10 @@ def parse(data):
     out = {}
     for s in data.get("body", {}).get("stores", []):
         sid = s.get("storeNumber")
+        if sid:
+            _store_meta[sid] = {"name": s.get("storeName", sid), "city": s.get("city", ""),
+                                "postcode": (s.get("address") or {}).get("postalCode", ""),
+                                "phone": s.get("phoneNumber", ""), "distance_mi": s.get("storedistance")}
         if TARGET_IDS and sid not in TARGET_IDS:
             continue
         for part, pa in s.get("partsAvailability", {}).items():
@@ -189,6 +193,28 @@ def parse(data):
             status = "available" if (disp == "available" and elig) else "unavailable"
             out[(sid, part)] = (status, quote, s.get("storeName", sid))
     return out
+
+_store_meta = {}
+SNAPSHOT = os.path.join(BASE, "snapshot.json")
+PAUSED = os.path.join(BASE, "paused")
+
+def write_snapshot(res, err=None):
+    """Atomic JSON for the menu bar app: every target store x part, plus block state."""
+    stores = {}
+    for (sid, part), (status, quote, name) in (res or {}).items():
+        m = _store_meta.get(sid, {})
+        e = stores.setdefault(sid, {"name": m.get("name", name), "city": m.get("city", ""),
+                                    "postcode": m.get("postcode", ""), "phone": m.get("phone", ""),
+                                    "distance_mi": m.get("distance_mi"), "parts": {}})
+        e["parts"][part] = {"available": status == "available", "quote": quote}
+    snap = {"checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "parts": list(PARTS), "part_names": dict(PARTS),
+            "plan_a": sorted(PLAN_A), "buy_urls": dict(PART_URL),
+            "launchd_label": LAUNCHD_LABEL, "error": err, "stores": stores}
+    tmp = SNAPSHOT + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(snap, f)
+    os.replace(tmp, SNAPSHOT)
 
 _cycle = [0]
 _retry_after = [0]
@@ -305,6 +331,8 @@ def main():
     blocked_alerted = bool(st.get("blocked_alerted"))
 
     while not stop["flag"]:
+        if os.path.exists(PAUSED):
+            time.sleep(5); continue
         if datetime.now() >= RUN_UNTIL:
             break
         if STANDBY_HB:
@@ -333,6 +361,7 @@ def main():
             wait = max(BACKOFF[min(fails - 1, len(BACKOFF) - 1)], _retry_after[0])
             st["blocked_until"] = now + wait; save_state(st)
             log(f"POLL FAILED ({fails}): {err} — backoff {wait}s")
+            write_snapshot(None, err)
             if fails >= 2 and not blocked_alerted:
                 alert(f"WARNING: Stockholm cannot read Apple's feed ({err}). Retrying with backoff — "
                       f"availability is UNKNOWN until this clears. Check the app yourself.", urgent=True)
@@ -415,6 +444,7 @@ def main():
         summary = sum(1 for v in res.values() if v[0] == "available")
         log(f"ok: {len(res)} store/part combos, {summary} available"
             + (f", quote='{next(iter(res.values()))[1]}'" if res else ""))
+        write_snapshot(res)
         if HEARTBEAT_EVERY and now - last_hb >= HEARTBEAT_EVERY:
             imessage(f"Stockholm heartbeat {datetime.now():%H:%M}: polling fine, {summary} available.")
             last_hb = now
